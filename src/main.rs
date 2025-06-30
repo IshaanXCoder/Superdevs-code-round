@@ -4,6 +4,8 @@ use axum::{Router, Json, routing::{get, post}, http::StatusCode, response::IntoR
 use serde::{Serialize, Deserialize};
 use base64::Engine;
 use std::net::SocketAddr;
+use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Signature;
 
 #[derive(Serialize)]
 struct ApiResponse<T> {
@@ -69,6 +71,13 @@ struct MintTokenRequest {
 struct SignMessageRequest {
     message: String,
     secret: String,
+}
+
+#[derive(Deserialize)]
+struct SendSolRequest {
+    from: String,
+    to: String,
+    lamports: u64,
 }
 
 fn error_response(message: &str) -> impl IntoResponse {
@@ -166,6 +175,95 @@ async fn mint_token_handler(Json(payload): Json<MintTokenRequest>) -> impl IntoR
     (StatusCode::OK, Json(response))
 }
 
+async fn sign_message_handler(Json(payload): Json<SignMessageRequest>) -> impl IntoResponse {
+    if payload.message.is_empty() || payload.secret.is_empty() {
+        return error_response("Missing required fields");
+    }
+
+    let secret_bytes = match bs58::decode(&payload.secret).into_vec() {
+        Ok(bytes) => bytes,
+        Err(_) => return error_response("Invalid secret key format"),
+    };
+
+    let keypair = match Keypair::from_bytes(&secret_bytes) {
+        Ok(kp) => kp,
+        Err(_) => return error_response("Invalid secret key"),
+    };
+
+    let message_bytes = payload.message.as_bytes();
+    
+    // Use try_sign_message for proper message signing
+    let signature = match keypair.try_sign_message(message_bytes) {
+        Ok(sig) => sig,
+        Err(_) => return error_response("Failed to sign message"),
+    };
+
+    let response_data = SignatureData {
+        signature: base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
+        public_key: keypair.pubkey().to_string(),
+        message: payload.message,
+    };
+
+    let response = ApiResponse {
+        success: true,
+        data: response_data,
+    };
+
+    (StatusCode::OK, Json(response))
+}
+
+async fn send_sol_handler(Json(payload): Json<SendSolRequest>) -> impl IntoResponse {
+    if payload.from.is_empty() || payload.to.is_empty() {
+        return error_response("Missing required fields");
+    }
+
+    if payload.lamports == 0 {
+        return error_response("Amount must be greater than 0");
+    }
+
+    let from_pubkey = match payload.from.parse::<Pubkey>() {
+        Ok(pk) => pk,
+        Err(_) => return error_response("Invalid sender address"),
+    };
+
+    let to_pubkey = match payload.to.parse::<Pubkey>() {
+        Ok(pk) => pk,
+        Err(_) => return error_response("Invalid recipient address"),
+    };
+
+    if from_pubkey == to_pubkey {
+        return error_response("Cannot send SOL to the same address");
+    }
+
+    let accounts = vec![
+        AccountMeta {
+            pubkey: payload.from.clone(),
+            is_signer: true,
+            is_writable: true,
+        },
+        AccountMeta {
+            pubkey: payload.to.clone(),
+            is_signer: false,
+            is_writable: true,
+        },
+    ];
+
+    let mut instruction_bytes = vec![2u8, 0u8, 0u8, 0u8];
+    instruction_bytes.extend_from_slice(&payload.lamports.to_le_bytes());
+
+    let instruction_data = InstructionData {
+        program_id: "11111111111111111111111111111112".to_string(),
+        accounts,
+        instruction_data: base64::engine::general_purpose::STANDARD.encode(&instruction_bytes),
+    };
+
+    let response = ApiResponse {
+        success: true,
+        data: instruction_data,
+    };
+
+    (StatusCode::OK, Json(response))
+}
 
 #[tokio::main]
 async fn main() {
@@ -173,8 +271,9 @@ async fn main() {
         .route("/", get(root_handler))
         .route("/keypair", get(keypair_handler))
         .route("/token/create", post(create_token_handler))
-        .route("/token/mint", post(mint_token_handler));
-        // .route("/message/sign", post(sign_message_handler));
+        .route("/token/mint", post(mint_token_handler))
+        .route("/message/sign", post(sign_message_handler))
+        .route("/send/sol", post(send_sol_handler));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     
