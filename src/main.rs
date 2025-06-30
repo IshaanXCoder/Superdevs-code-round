@@ -16,6 +16,7 @@ struct ErrorResponse {
     success: bool,
     error: String,
 }
+
 #[derive(Serialize)]
 struct KeypairData {
     pubkey: String,
@@ -41,6 +42,13 @@ struct InstructionData {
     instruction_data: String,
 }
 
+#[derive(Serialize)]
+struct SignatureData {
+    signature: String,
+    public_key: String,
+    message: String,
+}
+
 #[derive(Deserialize)]
 struct CreateTokenRequest {
     #[serde(rename = "mintAuthority")]
@@ -57,6 +65,12 @@ struct MintTokenRequest {
     amount: u64,
 }
 
+#[derive(Deserialize)]
+struct SignMessageRequest {
+    message: String,
+    secret: String,
+}
+
 fn error_response(message: &str) -> impl IntoResponse {
     let response = ErrorResponse {
         success: false,
@@ -65,14 +79,14 @@ fn error_response(message: &str) -> impl IntoResponse {
     (StatusCode::BAD_REQUEST, Json(response))
 }
 
-async fn root_handler() -> Json<ApiResponse<MessageData>> {
+async fn root_handler() -> impl IntoResponse {
     let response = ApiResponse {
         success: true,
         data: MessageData {
             message: "gm gm".to_string(),
         },
     };
-    Json(response)
+    (StatusCode::OK, Json(response))
 }
 
 async fn keypair_handler() -> impl IntoResponse {
@@ -152,6 +166,7 @@ async fn mint_token_handler(Json(payload): Json<MintTokenRequest>) -> impl IntoR
     (StatusCode::OK, Json(response))
 }
 
+
 #[tokio::main]
 async fn main() {
     let app = Router::new()
@@ -159,6 +174,7 @@ async fn main() {
         .route("/keypair", get(keypair_handler))
         .route("/token/create", post(create_token_handler))
         .route("/token/mint", post(mint_token_handler));
+        // .route("/message/sign", post(sign_message_handler));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     
