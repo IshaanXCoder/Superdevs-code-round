@@ -45,10 +45,38 @@ struct InstructionData {
 }
 
 #[derive(Serialize)]
+struct SolTransferData {
+    program_id: String,
+    accounts: Vec<String>,
+    instruction_data: String,
+}
+
+#[derive(Serialize)]
+struct TokenTransferData {
+    program_id: String,
+    accounts: Vec<TokenAccountMeta>,
+    instruction_data: String,
+}
+
+#[derive(Serialize)]
+struct TokenAccountMeta {
+    pubkey: String,
+    #[serde(rename = "isSigner")]
+    is_signer: bool,
+}
+
+#[derive(Serialize)]
 struct SignatureData {
     signature: String,
     public_key: String,
     message: String,
+}
+
+#[derive(Serialize)]
+struct VerifyData {
+    valid: bool,
+    message: String,
+    pubkey: String,
 }
 
 #[derive(Deserialize)]
@@ -74,10 +102,25 @@ struct SignMessageRequest {
 }
 
 #[derive(Deserialize)]
+struct VerifyMessageRequest {
+    message: String,
+    signature: String,
+    pubkey: String,
+}
+
+#[derive(Deserialize)]
 struct SendSolRequest {
     from: String,
     to: String,
     lamports: u64,
+}
+
+#[derive(Deserialize)]
+struct SendTokenRequest {
+    destination: String,
+    mint: String,
+    owner: String,
+    amount: u64,
 }
 
 fn error_response(message: &str) -> impl IntoResponse {
@@ -192,7 +235,6 @@ async fn sign_message_handler(Json(payload): Json<SignMessageRequest>) -> impl I
 
     let message_bytes = payload.message.as_bytes();
     
-    // Use try_sign_message for proper message signing
     let signature = match keypair.try_sign_message(message_bytes) {
         Ok(sig) => sig,
         Err(_) => return error_response("Failed to sign message").into_response(),
@@ -202,6 +244,43 @@ async fn sign_message_handler(Json(payload): Json<SignMessageRequest>) -> impl I
         signature: base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
         public_key: keypair.pubkey().to_string(),
         message: payload.message,
+    };
+
+    let response = ApiResponse {
+        success: true,
+        data: response_data,
+    };
+
+    (StatusCode::OK, Json(response)).into_response()
+}
+
+async fn verify_message_handler(Json(payload): Json<VerifyMessageRequest>) -> impl IntoResponse {
+    if payload.message.is_empty() || payload.signature.is_empty() || payload.pubkey.is_empty() {
+        return error_response("Missing required fields").into_response();
+    }
+
+    let pubkey = match payload.pubkey.parse::<Pubkey>() {
+        Ok(pk) => pk,
+        Err(_) => return error_response("Invalid public key").into_response(),
+    };
+
+    let signature_bytes = match base64::engine::general_purpose::STANDARD.decode(&payload.signature) {
+        Ok(bytes) => bytes,
+        Err(_) => return error_response("Invalid signature format").into_response(),
+    };
+
+    let signature = match solana_sdk::signature::Signature::try_from(signature_bytes.as_slice()) {
+        Ok(sig) => sig,
+        Err(_) => return error_response("Invalid signature").into_response(),
+    };
+
+    let message_bytes = payload.message.as_bytes();
+    let is_valid = signature.verify(&pubkey.to_bytes(), message_bytes);
+
+    let response_data = VerifyData {
+        valid: is_valid,
+        message: payload.message,
+        pubkey: payload.pubkey,
     };
 
     let response = ApiResponse {
@@ -235,24 +314,52 @@ async fn send_sol_handler(Json(payload): Json<SendSolRequest>) -> impl IntoRespo
         return error_response("Cannot send SOL to the same address").into_response();
     }
 
-    let accounts = vec![
-        AccountMeta {
-            pubkey: payload.from.clone(),
-            is_signer: true,
-            is_writable: true,
-        },
-        AccountMeta {
-            pubkey: payload.to.clone(),
-            is_signer: false,
-            is_writable: true,
-        },
-    ];
-
     let mut instruction_bytes = vec![2u8, 0u8, 0u8, 0u8];
     instruction_bytes.extend_from_slice(&payload.lamports.to_le_bytes());
 
-    let instruction_data = InstructionData {
+    let instruction_data = SolTransferData {
         program_id: "11111111111111111111111111111112".to_string(),
+        accounts: vec![payload.from, payload.to],
+        instruction_data: base64::engine::general_purpose::STANDARD.encode(&instruction_bytes),
+    };
+
+    let response = ApiResponse {
+        success: true,
+        data: instruction_data,
+    };
+
+    (StatusCode::OK, Json(response)).into_response()
+}
+
+async fn send_token_handler(Json(payload): Json<SendTokenRequest>) -> impl IntoResponse {
+    if payload.destination.is_empty() || payload.mint.is_empty() || payload.owner.is_empty() {
+        return error_response("Missing required fields").into_response();
+    }
+
+    if payload.amount == 0 {
+        return error_response("Amount must be greater than 0").into_response();
+    }
+
+    let accounts = vec![
+        TokenAccountMeta {
+            pubkey: payload.owner.clone(),
+            is_signer: true,
+        },
+        TokenAccountMeta {
+            pubkey: payload.destination.clone(),
+            is_signer: false,
+        },
+        TokenAccountMeta {
+            pubkey: payload.mint.clone(),
+            is_signer: false,
+        },
+    ];
+
+    let mut instruction_bytes = vec![3u8];
+    instruction_bytes.extend_from_slice(&payload.amount.to_le_bytes());
+
+    let instruction_data = TokenTransferData {
+        program_id: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".to_string(),
         accounts,
         instruction_data: base64::engine::general_purpose::STANDARD.encode(&instruction_bytes),
     };
@@ -269,11 +376,13 @@ async fn send_sol_handler(Json(payload): Json<SendSolRequest>) -> impl IntoRespo
 async fn main() {
     let app = Router::new()
         .route("/", get(root_handler))
-        .route("/keypair", get(keypair_handler))
+        .route("/keypair", post(keypair_handler))
         .route("/token/create", post(create_token_handler))
         .route("/token/mint", post(mint_token_handler))
         .route("/message/sign", post(sign_message_handler))
-        .route("/send/sol", post(send_sol_handler));
+        .route("/message/verify", post(verify_message_handler))
+        .route("/send/sol", post(send_sol_handler))
+        .route("/send/token", post(send_token_handler));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     
