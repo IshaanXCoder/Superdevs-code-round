@@ -177,17 +177,17 @@ async fn mint_token_handler(Json(payload): Json<MintTokenRequest>) -> impl IntoR
 
 async fn sign_message_handler(Json(payload): Json<SignMessageRequest>) -> impl IntoResponse {
     if payload.message.is_empty() || payload.secret.is_empty() {
-        return error_response("Missing required fields");
+        return error_response("Missing required fields").into_response();
     }
 
     let secret_bytes = match bs58::decode(&payload.secret).into_vec() {
         Ok(bytes) => bytes,
-        Err(_) => return error_response("Invalid secret key format"),
+        Err(_) => return error_response("Invalid secret key format").into_response(),
     };
 
     let keypair = match Keypair::from_bytes(&secret_bytes) {
         Ok(kp) => kp,
-        Err(_) => return error_response("Invalid secret key"),
+        Err(_) => return error_response("Invalid secret key").into_response(),
     };
 
     let message_bytes = payload.message.as_bytes();
@@ -195,7 +195,7 @@ async fn sign_message_handler(Json(payload): Json<SignMessageRequest>) -> impl I
     // Use try_sign_message for proper message signing
     let signature = match keypair.try_sign_message(message_bytes) {
         Ok(sig) => sig,
-        Err(_) => return error_response("Failed to sign message"),
+        Err(_) => return error_response("Failed to sign message").into_response(),
     };
 
     let response_data = SignatureData {
@@ -209,30 +209,30 @@ async fn sign_message_handler(Json(payload): Json<SignMessageRequest>) -> impl I
         data: response_data,
     };
 
-    (StatusCode::OK, Json(response))
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 async fn send_sol_handler(Json(payload): Json<SendSolRequest>) -> impl IntoResponse {
     if payload.from.is_empty() || payload.to.is_empty() {
-        return error_response("Missing required fields");
+        return error_response("Missing required fields").into_response();
     }
 
     if payload.lamports == 0 {
-        return error_response("Amount must be greater than 0");
+        return error_response("Amount must be greater than 0").into_response();
     }
 
     let from_pubkey = match payload.from.parse::<Pubkey>() {
         Ok(pk) => pk,
-        Err(_) => return error_response("Invalid sender address"),
+        Err(_) => return error_response("Invalid sender address").into_response(),
     };
 
     let to_pubkey = match payload.to.parse::<Pubkey>() {
         Ok(pk) => pk,
-        Err(_) => return error_response("Invalid recipient address"),
+        Err(_) => return error_response("Invalid recipient address").into_response(),
     };
 
     if from_pubkey == to_pubkey {
-        return error_response("Cannot send SOL to the same address");
+        return error_response("Cannot send SOL to the same address").into_response();
     }
 
     let accounts = vec![
@@ -262,7 +262,7 @@ async fn send_sol_handler(Json(payload): Json<SendSolRequest>) -> impl IntoRespo
         data: instruction_data,
     };
 
-    (StatusCode::OK, Json(response))
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 #[tokio::main]
